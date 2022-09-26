@@ -1,0 +1,286 @@
+kind: DaemonSet
+
+replicaCount: 1
+
+image:
+  repository: cr.fluentbit.io/fluent/fluent-bit
+  tag: ""
+  pullPolicy: Always
+
+testFramework:
+  image:
+    repository: busybox
+    pullPolicy: Always
+    tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: fluentbit-s3-bucket
+  annotations: 
+     eks.amazonaws.com/role-arn: arn:aws:iam::xxxxxxxxxxx:role/fluentbit-s3-bucket
+
+rbac:
+  create: true
+  nodeAccess: false
+
+podSecurityPolicy:
+  create: false
+  annotations: {}
+
+openShift:
+  enabled: false
+  securityContextConstraints:
+    create: true
+    annotations: {}
+
+podSecurityContext: {}
+
+hostNetwork: false
+dnsPolicy: ClusterFirst
+
+dnsConfig: {}
+
+hostAliases: []
+
+
+securityContext: {}
+
+
+service:
+  type: ClusterIP
+  port: 2020
+  labels: {}
+  annotations: {}
+
+
+serviceMonitor:
+  enabled: false
+
+
+prometheusRule:
+  enabled: false
+
+dashboards:
+  enabled: false
+  labelKey: grafana_dashboard
+  annotations: {}
+  namespace: ""
+
+lifecycle: {}
+
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: http
+
+resources: {}
+#   limits:
+#     cpu: 100m
+#     memory: 128Mi
+#   requests:
+#     cpu: 100m
+#     memory: 128Mi
+
+## only available if kind is Deployment
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts: []
+  # - host: fluent-bit.example.tld
+  extraHosts: []
+  # - host: fluent-bit-extra.example.tld
+      ## specify extraPort number
+  #   port: 5170
+  tls: []
+  #  - secretName: fluent-bit-example-tld
+  #    hosts:
+  #      - fluent-bit.example.tld
+
+## only available if kind is Deployment
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75
+  customRules: []
+  behavior: {}
+
+podDisruptionBudget:
+  enabled: false
+  annotations: {}
+  maxUnavailable: "30%"
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+labels: {}
+
+annotations: {}
+
+podAnnotations: {}
+
+podLabels: {}
+
+priorityClassName: ""
+
+env: 
+  - name: CLUSTER_NAME
+    value: eks_test
+  - name: MY_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+
+envWithTpl: []
+
+
+envFrom: []
+
+extraContainers: []
+
+flush: 1
+
+metricsPort: 2020
+
+extraPorts: []
+
+
+extraVolumes: []
+
+extraVolumeMounts: []
+
+updateStrategy: {}
+
+existingConfigMap: ""
+
+networkPolicy:
+  enabled: false
+
+
+luaScripts: {}
+
+config:
+  service: |
+    [SERVICE]
+        Daemon Off
+        Flush {{ .Values.flush }}
+        Log_Level {{ .Values.logLevel }}
+        Parsers_File parsers.conf
+        Parsers_File custom_parsers.conf
+        HTTP_Server On
+        HTTP_Listen 0.0.0.0
+        HTTP_Port {{ .Values.metricsPort }}
+        Health_Check On
+
+  ## https://docs.fluentbit.io/manual/pipeline/inputs
+  inputs: |
+    [INPUT]
+        Name systemd
+        Tag kube.*
+        Max_Entries 5000
+        Path /var/log/journal
+        Read_From_Tail On
+        DB /var/log/journal.db
+
+  outputs: |
+    [OUTPUT]
+        Name s3
+        Match kube.*
+        bucket test-fluentbit
+        region us-east-1
+        use_put_object On
+        store_dir /tmp/fluent-bit/s3
+        s3_key_format /${CLUSTER_NAME}/${MY_NODE_NAME}/%Y/%m/%d/
+        s3_key_format_tag_delimiters .-
+        total_file_size 50M
+        upload_timeout 2m
+
+  ## https://docs.fluentbit.io/manual/pipeline/filters
+  filters: |
+
+
+  ## https://docs.fluentbit.io/manual/pipeline/outputs
+
+
+  ## https://docs.fluentbit.io/manual/pipeline/parsers
+  customParsers: |
+    [PARSER]
+        Name        s3_logs
+        Format      json
+        Time_Key    requestReceivedTimestamp
+        Time_Format %Y-%m-%dT%H:%M:%S.%LZ
+        Time_Keep   On
+
+    [PARSER]
+        Name    k8s-custom-tag
+        Format  regex
+        Regex   ^(?<namespace_name>[^_]+)\.(?<container_name>.+)\.(?<pod_name>[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)\.(?<docker_id>[a-z0-9]{64})-$
+
+
+  extraFiles: {}
+#     example.conf: |
+#       [OUTPUT]
+#           Name example
+#           Match foo.*
+#           Host bar
+
+volumeMounts:
+  - name: config
+    mountPath: /fluent-bit/etc/fluent-bit.conf
+    subPath: fluent-bit.conf
+  - name: config
+    mountPath: /fluent-bit/etc/custom_parsers.conf
+    subPath: custom_parsers.conf
+
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+  - name: etcmachineid
+    hostPath:
+      path: /etc/machine-id
+      type: File
+  - name: kubernetes-host
+    hostPath:
+      path: /var/log/journal
+      type: Directory
+
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+  - name: etcmachineid
+    mountPath: /etc/machine-id
+    readOnly: true
+  - name: kubernetes-host
+    mountPath: /var/log/journal
+
+args: []
+
+command: []
+
+# This supports either a structured array or a templatable string
+initContainers: []
+
+logLevel: info
